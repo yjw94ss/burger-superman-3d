@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>汉堡超人打Boss - 3D游戏</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
@@ -31,6 +31,30 @@
   #overlay button { font-size:20px; padding:12px 40px; border-radius:12px; border:none; cursor:pointer; background:#4caf50; color:#fff; font-weight:bold; }
   #title { position:fixed; top:12px; left:50%; transform:translateX(-50%); color:#fff; font-size:20px; font-weight:900; text-shadow:0 2px 8px rgba(0,0,0,.6); z-index:10; pointer-events:none; }
   #transformFlash { position:fixed; inset:0; background:#fff; opacity:0; pointer-events:none; z-index:15; transition:opacity .3s; }
+  /* ---------- 手机适配 ---------- */
+  #c { touch-action:none; }
+  #joyZone { position:fixed; left:18px; bottom:24px; width:132px; height:132px; border-radius:50%; background:rgba(255,255,255,.15); border:2px solid rgba(255,255,255,.5); z-index:11; display:none; touch-action:none; }
+  #knob { position:absolute; left:50%; top:50%; width:58px; height:58px; border-radius:50%; background:rgba(255,255,255,.75); box-shadow:0 2px 8px rgba(0,0,0,.4); transform:translate(-50%,-50%); }
+  #btnJump { display:none; width:84px; height:84px; border-radius:50%; font-size:15px; line-height:1.4; background:linear-gradient(135deg,#4caf50,#2e7d32); align-self:flex-end; }
+  body.touch #joyZone { display:block; }
+  body.touch #btnJump { display:block; }
+  #btns button { touch-action:manipulation; user-select:none; -webkit-user-select:none; }
+  #helpToggle { display:none; position:fixed; left:12px; top:12px; z-index:12; font-size:20px; background:rgba(0,0,0,.55); color:#fff; border:none; border-radius:10px; padding:8px 12px; }
+  #help.hidden { display:none; }
+  @media (max-width:700px){
+    #title { font-size:15px; top:8px; }
+    #helpToggle { display:block; }
+    #ui { padding:8px; gap:8px; top:52px; }
+    .bar-wrap { min-width:0; flex:1; padding:6px 8px; }
+    .bar-wrap h3 { font-size:12px; }
+    #help { font-size:12px; left:8px; right:8px; bottom:auto; top:130px; }
+    #btns { right:10px; bottom:calc(20px + env(safe-area-inset-bottom)); gap:8px; }
+    #btns button { font-size:14px; padding:12px 16px; min-width:96px; }
+    #btnJump { width:76px; height:76px; }
+    #joyZone { left:12px; bottom:calc(16px + env(safe-area-inset-bottom)); }
+    #msg { font-size:28px; width:90%; }
+    #overlay h1 { font-size:32px; text-align:center; padding:0 16px; }
+  }
 </style>
 <script type="importmap">
 { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
@@ -51,15 +75,18 @@
   </div>
 </div>
 <div id="help">
-  🕹️ WASD 移动 &nbsp;|&nbsp; 空格 跳跃/飞行 &nbsp;|&nbsp; 鼠标拖拽旋转视角<br>
-  ⚡ <b>E</b> 变身超人 &nbsp;|&nbsp; 👊 <b>J</b> / 点击 攻击 &nbsp;|&nbsp; 🔥 <b>K</b> 激光（超人专属）<br>
-  💡 先变身成超人再去打 Boss，不然打不动！
+  🕹️ WASD / 左摇杆 移动 &nbsp;|&nbsp; 空格 / 🟢跳键 跳跃飞行 &nbsp;|&nbsp; 拖拽旋转视角<br>
+  ⚡ <b>E</b> 变身 &nbsp;|&nbsp; 👊 <b>J</b> 攻击（可按住连打） &nbsp;|&nbsp; 🔥 <b>K</b> 激光（超人专属，可按住）<br>
+  💡 先变身成汉堡超人再去打 Boss，不然打不动！
 </div>
+<button id="helpToggle">❓</button>
 <div id="btns">
   <button id="btnTransform">⚡ 变身 (E)</button>
   <button id="btnAttack">👊 攻击 (J)</button>
   <button id="btnLaser">🔥 激光 (K)</button>
+  <button id="btnJump">🟢<br>跳 / 飞</button>
 </div>
+<div id="joyZone"><div id="knob"></div></div>
 <div id="msg"></div>
 <div id="transformFlash"></div>
 <div id="overlay"><h1 id="overlayTitle"></h1><p id="overlaySub"></p><button onclick="location.reload()">🔄 再来一局</button></div>
@@ -387,6 +414,7 @@ const S = {
   bossAtkCd:0, over:false,
   camAngle:0, camDist:11, camH:6,
   keys:{}, time:0,
+  joyX:0, joyY:0, holdAtk:false, holdLaser:false,
 };
 const projectiles = [];
 const particles = [];
@@ -544,13 +572,57 @@ addEventListener('keyup', e=>{ S.keys[e.code]=false; });
 document.getElementById('btnTransform').onclick = transform;
 document.getElementById('btnAttack').onclick = attack;
 document.getElementById('btnLaser').onclick = fireLaser;
-canvas.addEventListener('pointerdown', e=>{ if(e.button===0) attack(); });
+// 触屏：只有鼠标点画布才攻击（手机上点屏幕是转视角，用按钮攻击，避免误触）
+canvas.addEventListener('pointerdown', e=>{ if(e.pointerType==='mouse' && e.button===0) attack(); });
 
-// 视角拖拽
-let dragging=false, px=0;
-canvas.addEventListener('pointerdown', e=>{ dragging=true; px=e.clientX; });
-addEventListener('pointermove', e=>{ if(dragging){ S.camAngle += (e.clientX-px)*.008; px=e.clientX; } });
-addEventListener('pointerup', ()=>dragging=false);
+// 视角拖拽（鼠标 + 单指触屏；触屏上下滑还能调视角高低）
+let dragging=false, dragId=null, px=0, py=0;
+canvas.addEventListener('pointerdown', e=>{ if(dragId!==null) return; dragId=e.pointerId; dragging=true; px=e.clientX; py=e.clientY; });
+addEventListener('pointermove', e=>{
+  if(!dragging || e.pointerId!==dragId) return;
+  S.camAngle += (e.clientX-px)*.008;
+  if(e.pointerType!=='mouse') S.camH = Math.min(14, Math.max(3, S.camH + (e.clientY-py)*.02));
+  px=e.clientX; py=e.clientY;
+});
+const dragEnd=e=>{ if(e.pointerId===dragId){ dragging=false; dragId=null; } };
+addEventListener('pointerup', dragEnd); addEventListener('pointercancel', dragEnd);
+
+// ---------- 手机触屏操作 ----------
+const isTouch = matchMedia('(pointer:coarse)').matches || 'ontouchstart' in window;
+if(isTouch){
+  document.body.classList.add('touch');
+  document.getElementById('help').classList.add('hidden'); // 手机上默认收起说明
+}
+document.getElementById('helpToggle').onclick = ()=>document.getElementById('help').classList.toggle('hidden');
+// 跳跃键（按住=飞行）
+const bJump = document.getElementById('btnJump');
+bJump.addEventListener('pointerdown', e=>{ e.preventDefault(); S.keys['Space']=true; });
+['pointerup','pointerleave','pointercancel'].forEach(t=>bJump.addEventListener(t, ()=>{ S.keys['Space']=false; }));
+// 攻击 / 激光：按住连打
+const bAtk = document.getElementById('btnAttack'), bLaser = document.getElementById('btnLaser');
+bAtk.addEventListener('pointerdown', e=>{ e.preventDefault(); S.holdAtk=true; attack(); });
+['pointerup','pointerleave','pointercancel'].forEach(t=>bAtk.addEventListener(t, ()=>{ S.holdAtk=false; }));
+bLaser.addEventListener('pointerdown', e=>{ e.preventDefault(); S.holdLaser=true; fireLaser(); });
+['pointerup','pointerleave','pointercancel'].forEach(t=>bLaser.addEventListener(t, ()=>{ S.holdLaser=false; }));
+// 虚拟摇杆
+const joyZone = document.getElementById('joyZone'), knob = document.getElementById('knob');
+let joyId=null, joyCX=0, joyCY=0;
+function moveKnob(x,y){
+  let dx=x-joyCX, dy=y-joyCY;
+  const m=Math.hypot(dx,dy), max=44;
+  if(m>max){ dx*=max/m; dy*=max/m; }
+  knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+  S.joyX=dx/max; S.joyY=dy/max;
+}
+joyZone.addEventListener('pointerdown', e=>{
+  e.preventDefault(); joyId=e.pointerId;
+  try{ joyZone.setPointerCapture(joyId); }catch(_){}
+  const r=joyZone.getBoundingClientRect(); joyCX=r.left+r.width/2; joyCY=r.top+r.height/2;
+  moveKnob(e.clientX,e.clientY);
+});
+joyZone.addEventListener('pointermove', e=>{ if(e.pointerId===joyId) moveKnob(e.clientX,e.clientY); });
+const joyEnd=e=>{ if(e.pointerId===joyId){ joyId=null; S.joyX=0; S.joyY=0; knob.style.transform='translate(-50%,-50%)'; } };
+joyZone.addEventListener('pointerup', joyEnd); joyZone.addEventListener('pointercancel', joyEnd);
 addEventListener('wheel', e=>{ S.camDist = Math.min(20, Math.max(6, S.camDist + e.deltaY*.01)); });
 addEventListener('resize', ()=>{
   camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
@@ -572,10 +644,13 @@ function animate(){
   if(S.laserCd>0) S.laserCd-=dt;
 
   if(!S.over){
+    if(S.holdAtk) attack();
+    if(S.holdLaser) fireLaser();
     // --- 玩家移动 ---
     const speed = S.form==='super'? 9 : 5.5;
-    const mx = (S.keys['KeyD']?1:0)-(S.keys['KeyA']?1:0);
-    const mz = (S.keys['KeyS']?1:0)-(S.keys['KeyW']?1:0);
+    let mx = ((S.keys['KeyD']||S.keys['ArrowRight'])?1:0)-((S.keys['KeyA']||S.keys['ArrowLeft'])?1:0) + (S.joyX||0);
+    let mz = ((S.keys['KeyS']||S.keys['ArrowDown'])?1:0)-((S.keys['KeyW']||S.keys['ArrowUp'])?1:0) + (S.joyY||0);
+    mx = Math.max(-1,Math.min(1,mx)); mz = Math.max(-1,Math.min(1,mz));
     // 相对视角方向
     const sin=Math.sin(S.camAngle), cos=Math.cos(S.camAngle);
     const wx = mx*cos - mz*sin, wz = mx*sin + mz*cos;
