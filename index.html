@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>汉堡超人打Boss - 3D游戏</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { overflow:hidden; font-family: "PingFang SC","Microsoft YaHei",sans-serif; background:#87CEEB; }
+  #c { display:block; }
+  #ui { position:fixed; top:0; left:0; right:0; padding:12px; display:flex; gap:12px; align-items:flex-start; pointer-events:none; z-index:10; }
+  .bar-wrap { background:rgba(0,0,0,.5); border-radius:10px; padding:8px 12px; color:#fff; min-width:220px; }
+  .bar-wrap h3 { font-size:14px; margin-bottom:6px; }
+  .bar { height:14px; background:#333; border-radius:7px; overflow:hidden; }
+  .bar > div { height:100%; transition:width .2s; border-radius:7px; }
+  #playerHpBar { background:linear-gradient(90deg,#4caf50,#8bc34a); width:100%; }
+  #bossHpBar { background:linear-gradient(90deg,#f44336,#ff9800); width:100%; }
+  #formTag { display:inline-block; margin-top:6px; padding:2px 10px; border-radius:12px; font-size:12px; background:#ff9800; }
+  #formTag.super { background:#2196f3; }
+  #help { position:fixed; left:12px; bottom:12px; background:rgba(0,0,0,.55); color:#fff; padding:10px 14px; border-radius:10px; font-size:13px; line-height:1.8; z-index:10; }
+  #btns { position:fixed; right:12px; bottom:12px; display:flex; flex-direction:column; gap:10px; z-index:10; }
+  #btns button { pointer-events:auto; font-size:16px; padding:12px 20px; border:none; border-radius:12px; cursor:pointer; font-weight:bold; color:#fff; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+  #btnTransform { background:linear-gradient(135deg,#ff9800,#ff5722); }
+  #btnAttack { background:linear-gradient(135deg,#f44336,#d32f2f); }
+  #btnLaser { background:linear-gradient(135deg,#2196f3,#9c27b0); }
+  #btns button:active { transform:scale(.95); }
+  #btns button:disabled { opacity:.4; }
+  #msg { position:fixed; top:40%; left:50%; transform:translate(-50%,-50%); font-size:42px; font-weight:900; color:#fff; text-shadow:0 4px 20px rgba(0,0,0,.6); display:none; z-index:20; text-align:center; }
+  #overlay { position:fixed; inset:0; background:rgba(0,0,0,.7); display:none; align-items:center; justify-content:center; z-index:30; flex-direction:column; gap:16px; color:#fff; }
+  #overlay h1 { font-size:52px; }
+  #overlay button { font-size:20px; padding:12px 40px; border-radius:12px; border:none; cursor:pointer; background:#4caf50; color:#fff; font-weight:bold; }
+  #title { position:fixed; top:12px; left:50%; transform:translateX(-50%); color:#fff; font-size:20px; font-weight:900; text-shadow:0 2px 8px rgba(0,0,0,.6); z-index:10; pointer-events:none; }
+  #transformFlash { position:fixed; inset:0; background:#fff; opacity:0; pointer-events:none; z-index:15; transition:opacity .3s; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="title">🍔 汉堡超人打 Boss 👊</div>
+<div id="ui">
+  <div class="bar-wrap">
+    <h3>🍔 你 (<span id="formName">汉堡形态</span>) HP: <span id="playerHpText">100</span></h3>
+    <div class="bar"><div id="playerHpBar"></div></div>
+    <span id="formTag">汉堡：弱小但可爱，攻击低</span>
+  </div>
+  <div class="bar-wrap">
+    <h3>👹 Boss 魔王 HP: <span id="bossHpText">600</span></h3>
+    <div class="bar"><div id="bossHpBar"></div></div>
+  </div>
+</div>
+<div id="help">
+  🕹️ WASD 移动 &nbsp;|&nbsp; 空格 跳跃/飞行 &nbsp;|&nbsp; 鼠标拖拽旋转视角<br>
+  ⚡ <b>E</b> 变身超人 &nbsp;|&nbsp; 👊 <b>J</b> / 点击 攻击 &nbsp;|&nbsp; 🔥 <b>K</b> 激光（超人专属）<br>
+  💡 先变身成超人再去打 Boss，不然打不动！
+</div>
+<div id="btns">
+  <button id="btnTransform">⚡ 变身 (E)</button>
+  <button id="btnAttack">👊 攻击 (J)</button>
+  <button id="btnLaser">🔥 激光 (K)</button>
+</div>
+<div id="msg"></div>
+<div id="transformFlash"></div>
+<div id="overlay"><h1 id="overlayTitle"></h1><p id="overlaySub"></p><button onclick="location.reload()">🔄 再来一局</button></div>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ---------- 基础场景 ----------
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.Fog(0x87ceeb, 40, 140);
+
+const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 500);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x558833, 0.9));
+const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+sun.position.set(20, 30, 10);
+sun.castShadow = true;
+sun.shadow.camera.left=-40; sun.shadow.camera.right=40;
+sun.shadow.camera.top=40; sun.shadow.camera.bottom=-40;
+sun.shadow.mapSize.set(2048,2048);
+scene.add(sun);
+
+// 地面
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(200,200),
+  new THREE.MeshStandardMaterial({ color:0x6abf4b })
+);
+ground.rotation.x = -Math.PI/2;
+ground.receiveShadow = true;
+scene.add(ground);
+scene.add(new THREE.GridHelper(200, 40, 0xffffff, 0xffffff));
+
+// 竞技场圆环
+const ring = new THREE.Mesh(
+  new THREE.RingGeometry(14, 16, 64),
+  new THREE.MeshBasicMaterial({ color:0xffeb3b, side:THREE.DoubleSide })
+);
+ring.rotation.x = -Math.PI/2; ring.position.y = 0.02;
+scene.add(ring);
+
+// 装饰：随机树和房子
+function addTree(x,z){
+  const g = new THREE.Group();
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(.4,.5,2,8), new THREE.MeshStandardMaterial({color:0x8b5a2b}));
+  trunk.position.y=1; trunk.castShadow=true; g.add(trunk);
+  const top = new THREE.Mesh(new THREE.ConeGeometry(2,4,8), new THREE.MeshStandardMaterial({color:0x2e7d32}));
+  top.position.y=4; top.castShadow=true; g.add(top);
+  g.position.set(x,0,z); scene.add(g);
+}
+function addHouse(x,z,c){
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(4,3,4), new THREE.MeshStandardMaterial({color:c}));
+  body.position.y=1.5; body.castShadow=true; g.add(body);
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(3.4,2,4), new THREE.MeshStandardMaterial({color:0xd32f2f}));
+  roof.position.y=4; roof.rotation.y=Math.PI/4; roof.castShadow=true; g.add(roof);
+  g.position.set(x,0,z); scene.add(g);
+}
+for(let i=0;i<14;i++){ const a=Math.random()*Math.PI*2, r=25+Math.random()*40; addTree(Math.cos(a)*r, Math.sin(a)*r); }
+addHouse(-22,-18,0x90caf9); addHouse(22,-20,0xffcc80); addHouse(0,-30,0xce93d8);
+
+// ---------- 汉堡人 ----------
+function buildBurger(){
+  const g = new THREE.Group();
+  const mat = c => new THREE.MeshStandardMaterial({ color:c, roughness:.6 });
+  const bottom = new THREE.Mesh(new THREE.CylinderGeometry(1.1,0.9,.4,24), mat(0xe8a34c));
+  bottom.position.y=.2; g.add(bottom);
+  const patty = new THREE.Mesh(new THREE.CylinderGeometry(1.15,1.15,.35,24), mat(0x6d4c41));
+  patty.position.y=.55; g.add(patty);
+  const cheese = new THREE.Mesh(new THREE.BoxGeometry(2.0,.12,2.0), mat(0xffeb3b));
+  cheese.position.y=.78; cheese.rotation.y=.4; g.add(cheese);
+  const lettuce = new THREE.Mesh(new THREE.CylinderGeometry(1.25,1.25,.15,24), mat(0x7ed957));
+  lettuce.position.y=.92; g.add(lettuce);
+  const topBun = new THREE.Mesh(new THREE.SphereGeometry(1.1,24,16,0,Math.PI*2,0,Math.PI/2), mat(0xf0b45a));
+  topBun.position.y=1.0; g.add(topBun);
+  // 芝麻
+  const sesMat = mat(0xfff8e1);
+  for(let i=0;i<8;i++){
+    const s = new THREE.Mesh(new THREE.SphereGeometry(.08,8,8), sesMat);
+    const a=Math.random()*Math.PI*2, r=Math.random()*.7;
+    s.position.set(Math.cos(a)*r, 1.0+Math.sqrt(Math.max(0,1.21-r*r))*.95, Math.sin(a)*r);
+    g.add(s);
+  }
+  // 眼睛（可爱）
+  const eyeMat = new THREE.MeshStandardMaterial({color:0x222222});
+  [-.35,.35].forEach(x=>{
+    const e = new THREE.Mesh(new THREE.SphereGeometry(.13,12,12), eyeMat);
+    e.position.set(x,.55,1.05); g.add(e);
+    const w = new THREE.Mesh(new THREE.SphereGeometry(.045,8,8), new THREE.MeshBasicMaterial({color:0xffffff}));
+    w.position.set(x+.04,.6,1.16); g.add(w);
+  });
+  // 小短腿
+  const legMat = mat(0x5d4037);
+  [-.45,.45].forEach(x=>{
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(.16,.16,.6,10), legMat);
+    leg.position.set(x,-.25,0); g.add(leg);
+  });
+  g.traverse(o=>{ if(o.isMesh) o.castShadow=true; });
+  return g;
+}
+
+// ---------- 汉堡超人（变身后依然是汉堡风味） ----------
+function buildSuperman(){
+  const g = new THREE.Group();
+  const blue = new THREE.MeshStandardMaterial({ color:0x1565c0, roughness:.5 });
+  const red = new THREE.MeshStandardMaterial({ color:0xd32f2f, roughness:.5 });
+  const skin = new THREE.MeshStandardMaterial({ color:0xffcc9e, roughness:.6 });
+  const bunM = new THREE.MeshStandardMaterial({ color:0xf0b45a, roughness:.6 });
+  const cheeseM = new THREE.MeshStandardMaterial({ color:0xffeb3b, roughness:.55 });
+  const lettuceM = new THREE.MeshStandardMaterial({ color:0x7ed957, roughness:.6 });
+  const pattyM = new THREE.MeshStandardMaterial({ color:0x6d4c41, roughness:.7 });
+
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(.55,1.0,6,14), blue);
+  body.position.y=1.3; g.add(body);
+  // 胸口：迷你汉堡徽章（代替S标志）
+  const badge = new THREE.Group();
+  const bBottom = new THREE.Mesh(new THREE.CylinderGeometry(.22,.18,.08,16), bunM);
+  const bPatty = new THREE.Mesh(new THREE.CylinderGeometry(.23,.23,.09,16), pattyM);
+  bPatty.position.y=.09;
+  const bLettuce = new THREE.Mesh(new THREE.CylinderGeometry(.25,.25,.05,16), lettuceM);
+  bLettuce.position.y=.16;
+  const bCheese = new THREE.Mesh(new THREE.BoxGeometry(.4,.04,.4), cheeseM);
+  bCheese.position.y=.2; bCheese.rotation.y=.5;
+  const bTop = new THREE.Mesh(new THREE.SphereGeometry(.22,16,10,0,Math.PI*2,0,Math.PI/2), bunM);
+  bTop.position.y=.22;
+  badge.add(bBottom,bPatty,bLettuce,bCheese,bTop);
+  badge.position.set(0,1.65,.55);
+  badge.scale.setScalar(1.15);
+  g.add(badge);
+
+  const head = new THREE.Mesh(new THREE.SphereGeometry(.45,20,20), skin);
+  head.position.y=2.55; g.add(head);
+  // 眼睛 + 笑脸
+  const eyeM = new THREE.MeshStandardMaterial({color:0x111111});
+  [-.15,.15].forEach(x=>{
+    const e=new THREE.Mesh(new THREE.SphereGeometry(.06,8,8), eyeM);
+    e.position.set(x,2.6,.4); g.add(e);
+  });
+  // 头顶：汉堡包帽子（面包盔！变身也像汉堡）
+  const bunHat = new THREE.Mesh(new THREE.SphereGeometry(.52,20,12,0,Math.PI*2,0,Math.PI/2), bunM);
+  bunHat.position.y=2.72; g.add(bunHat);
+  const sesM = new THREE.MeshStandardMaterial({color:0xfff8e1});
+  for(let i=0;i<10;i++){
+    const s=new THREE.Mesh(new THREE.SphereGeometry(.05,8,8), sesM);
+    const a=Math.random()*Math.PI*2, r=.2+Math.random()*.25;
+    s.position.set(Math.cos(a)*r, 2.72+Math.sqrt(Math.max(0,.27-r*r))*.92, Math.sin(a)*r);
+    g.add(s);
+  }
+  // 生菜围脖
+  const collar = new THREE.Mesh(new THREE.TorusGeometry(.42,.14,10,20), lettuceM);
+  collar.position.y=2.12; collar.rotation.x=Math.PI/2; g.add(collar);
+  // 芝士肩甲
+  [-.85,.85].forEach(x=>{
+    const pad = new THREE.Mesh(new THREE.BoxGeometry(.4,.1,.5), cheeseM);
+    pad.position.set(x,1.95,0); pad.rotation.z=x>0?-.2:.2; g.add(pad);
+  });
+
+  // 披风：芝士黄披风（汉堡风味）
+  const cape = new THREE.Mesh(new THREE.PlaneGeometry(1.3,1.9), new THREE.MeshStandardMaterial({color:0xffca28, side:THREE.DoubleSide}));
+  cape.position.set(0,1.7,-.62); cape.rotation.x=.25; cape.name='cape'; g.add(cape);
+
+  // 手臂
+  const armL = new THREE.Mesh(new THREE.CapsuleGeometry(.18,.7,4,10), blue);
+  armL.position.set(-.85,1.5,0); armL.rotation.z=.3; armL.name='armL'; g.add(armL);
+  const armR = armL.clone(); armR.position.x=.85; armR.rotation.z=-.3; armR.name='armR'; g.add(armR);
+  // 拳头（肉饼拳套！）
+  const fistL = new THREE.Mesh(new THREE.SphereGeometry(.24,12,12), pattyM);
+  fistL.position.set(-1.05,.95,0); fistL.name='fistL'; g.add(fistL);
+  const fistR = fistL.clone(); fistR.position.x=1.05; fistR.name='fistR'; g.add(fistR);
+
+  // 腿+靴子（面包靴）
+  [-.28,.28].forEach(x=>{
+    const leg = new THREE.Mesh(new THREE.CapsuleGeometry(.2,.6,4,10), blue);
+    leg.position.set(x,.35,0); g.add(leg);
+    const boot = new THREE.Mesh(new THREE.BoxGeometry(.36,.4,.52), bunM);
+    boot.position.set(x,-.15,.05); g.add(boot);
+  });
+  // 腰带：肉饼腰带 + 芝士扣
+  const belt = new THREE.Mesh(new THREE.CylinderGeometry(.57,.57,.16,16), pattyM);
+  belt.position.y=.85; g.add(belt);
+  const buckle = new THREE.Mesh(new THREE.BoxGeometry(.3,.18,.1), cheeseM);
+  buckle.position.set(0,.85,.55); g.add(buckle);
+
+  g.traverse(o=>{ if(o.isMesh) o.castShadow=true; });
+  return g;
+}
+
+// ---------- Boss 魔王 ----------
+function buildBoss(){
+  const g = new THREE.Group();
+  const darkRed = new THREE.MeshStandardMaterial({ color:0xb71c1c, roughness:.55 });
+  const dark = new THREE.MeshStandardMaterial({ color:0x4a148c, roughness:.6 });
+  const body = new THREE.Mesh(new THREE.SphereGeometry(1.6,24,24), darkRed);
+  body.position.y=2.2; g.add(body);
+  // 肚皮
+  const belly = new THREE.Mesh(new THREE.SphereGeometry(1.1,20,20), new THREE.MeshStandardMaterial({color:0xff8a65}));
+  belly.position.set(0,1.8,1.0); belly.scale.set(1,.9,.6); g.add(belly);
+  // 眼睛（发光）
+  const eyeM = new THREE.MeshBasicMaterial({ color:0xffff00 });
+  [-.5,.5].forEach(x=>{
+    const e = new THREE.Mesh(new THREE.SphereGeometry(.28,14,14), eyeM);
+    e.position.set(x,3.0,1.25); g.add(e);
+    const p = new THREE.Mesh(new THREE.SphereGeometry(.12,10,10), new THREE.MeshBasicMaterial({color:0xff0000}));
+    p.position.set(x,3.0,1.5); g.add(p);
+  });
+  // 角
+  const hornM = new THREE.MeshStandardMaterial({color:0xffeb3b});
+  [-1,1].forEach(s=>{
+    const h = new THREE.Mesh(new THREE.ConeGeometry(.3,1.2,10), hornM);
+    h.position.set(s*1.1,3.8,0); h.rotation.z=-s*.4; g.add(h);
+  });
+  // 手臂（粗）
+  const armM = dark;
+  const aL = new THREE.Mesh(new THREE.CapsuleGeometry(.4,1.2,4,10), armM);
+  aL.position.set(-2.0,2.2,0); aL.rotation.z=.5; aL.name='bossArmL'; g.add(aL);
+  const aR = aL.clone(); aR.position.x=2.0; aR.rotation.z=-.5; aR.name='bossArmR'; g.add(aR);
+  // 狼牙棒
+  const club = new THREE.Mesh(new THREE.CylinderGeometry(.18,.18,2.2,10), new THREE.MeshStandardMaterial({color:0x5d4037}));
+  club.position.set(2.6,2.8,0); club.rotation.z=-.5; g.add(club);
+  const spike = new THREE.Mesh(new THREE.SphereGeometry(.45,12,12), new THREE.MeshStandardMaterial({color:0x78909c}));
+  spike.position.set(3.1,3.6,0); g.add(spike);
+  // 腿
+  [-.7,.7].forEach(x=>{
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(.4,.5,1.4,10), dark);
+    leg.position.set(x,.7,0); g.add(leg);
+  });
+  // （头顶血条改为场景级，见下方 makeHeadBar，保证永远朝向相机）
+
+  g.traverse(o=>{ if(o.isMesh) o.castShadow=true; });
+  return g;
+}
+
+const player = new THREE.Group();
+const burgerMesh = buildBurger();
+const superMesh = buildSuperman();
+superMesh.visible = false;
+player.add(burgerMesh, superMesh);
+player.position.set(0,0,8);
+scene.add(player);
+
+const boss = buildBoss();
+boss.position.set(0,0,-10);
+scene.add(boss);
+
+// ---------- 头顶血条（3D，跟随人物，永远朝向相机） ----------
+function makeLabel(text){
+  const cv = document.createElement('canvas');
+  cv.width=256; cv.height=64;
+  const ctx = cv.getContext('2d');
+  ctx.font='bold 36px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.lineWidth=8; ctx.strokeStyle='rgba(0,0,0,.8)';
+  ctx.strokeText(text,128,32); ctx.fillStyle='#fff'; ctx.fillText(text,128,32);
+  const tex = new THREE.CanvasTexture(cv);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, depthTest:false, transparent:true }));
+  sp.scale.set(2.6,.65,1); sp.renderOrder=99;
+  return sp;
+}
+function makeHeadBar(width, labelText){
+  const grp = new THREE.Group();
+  const bg = new THREE.Mesh(new THREE.PlaneGeometry(width,.32),
+    new THREE.MeshBasicMaterial({ color:0x1a1a1a, side:THREE.DoubleSide, depthTest:false, transparent:true, opacity:.9 }));
+  bg.renderOrder=98;
+  const fg = new THREE.Mesh(new THREE.PlaneGeometry(width,.32),
+    new THREE.MeshBasicMaterial({ color:0x00e676, side:THREE.DoubleSide, depthTest:false, transparent:true }));
+  fg.renderOrder=99;
+  // 边框描边效果：稍大的黑底已经是边框了
+  grp.add(bg, fg);
+  const label = makeLabel(labelText);
+  label.position.y=.55;
+  grp.add(label);
+  grp.userData = { bg, fg, label, width };
+  scene.add(grp);
+  return grp;
+}
+const playerHeadBar = makeHeadBar(2.6, '🍔汉堡');
+const bossHeadBar = makeHeadBar(3.6, '👹魔王Boss');
+function setBarColor(fg, pct){
+  fg.material.color.set(pct>.5?0x00e676:(pct>.25?0xffeb3b:0xff5252));
+}
+function refreshHeadBars(){
+  // 玩家
+  const pp = Math.max(0, S.playerHp/S.playerMax);
+  const pu = playerHeadBar.userData;
+  pu.fg.scale.x = Math.max(0.001,pp);
+  pu.fg.position.x = -(pu.width*(1-pp))/2;
+  pu.fg.position.z = .01;
+  setBarColor(pu.fg, pp);
+  pu.label.material.map.image && 0; // 保持贴图
+  // Boss
+  const bp = Math.max(0, S.bossHp/S.bossMax);
+  const bu = bossHeadBar.userData;
+  bu.fg.scale.x = Math.max(0.001,bp);
+  bu.fg.position.x = -(bu.width*(1-bp))/2;
+  bu.fg.position.z = .01;
+  setBarColor(bu.fg, bp);
+  // 名字随形态变
+  // （用 canvas 重绘名字开销大，只在变身时调用 setHeadLabel）
+}
+function setHeadLabel(sprite, text){
+  const cv = document.createElement('canvas');
+  cv.width=256; cv.height=64;
+  const ctx = cv.getContext('2d');
+  ctx.font='bold 36px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.lineWidth=8; ctx.strokeStyle='rgba(0,0,0,.8)';
+  ctx.strokeText(text,128,32); ctx.fillStyle='#fff'; ctx.fillText(text,128,32);
+  sprite.material.map.image = cv;
+  sprite.material.map.needsUpdate = true;
+}
+
+// ---------- 状态 ----------
+const S = {
+  form:'burger', // burger | super
+  playerHp:100, playerMax:100,
+  bossHp:600, bossMax:600,
+  vy:0, grounded:true, flying:false,
+  atkCd:0, laserCd:0, transformCd:0,
+  bossAtkCd:0, over:false,
+  camAngle:0, camDist:11, camH:6,
+  keys:{}, time:0,
+};
+const projectiles = [];
+const particles = [];
+
+function showMsg(t, ms=1200){
+  const el = document.getElementById('msg');
+  el.textContent = t; el.style.display='block';
+  clearTimeout(showMsg._t);
+  showMsg._t = setTimeout(()=>el.style.display='none', ms);
+}
+function flash(){
+  const f = document.getElementById('transformFlash');
+  f.style.opacity=1; setTimeout(()=>f.style.opacity=0, 350);
+}
+function updateUI(){
+  document.getElementById('playerHpBar').style.width = (S.playerHp/S.playerMax*100)+'%';
+  document.getElementById('playerHpText').textContent = Math.max(0,Math.ceil(S.playerHp));
+  document.getElementById('bossHpBar').style.width = (S.bossHp/S.bossMax*100)+'%';
+  document.getElementById('bossHpText').textContent = Math.max(0,Math.ceil(S.bossHp));
+  const tag = document.getElementById('formTag');
+  const name = document.getElementById('formName');
+  if(S.form==='super'){ tag.textContent='汉堡超人：面包盔+芝士披风，攻击×4，可飞，可发激光！'; tag.classList.add('super'); name.textContent='汉堡超人形态'; }
+  else { tag.textContent='汉堡：弱小但可爱，攻击低'; tag.classList.remove('super'); name.textContent='汉堡形态'; }
+  document.getElementById('btnLaser').disabled = S.form!=='super';
+  if(typeof refreshHeadBars==='function' && typeof S!=='undefined' && S.playerMax) refreshHeadBars();
+}
+
+// ---------- 变身 ----------
+function transform(){
+  if(S.over || S.transformCd>0) return;
+  S.transformCd = 1.2;
+  flash();
+  spawnBurst(player.position.clone().add(new THREE.Vector3(0,1.5,0)), S.form==='burger'?0x2196f3:0xff9800, 40);
+  if(S.form==='burger'){
+    S.form='super'; burgerMesh.visible=false; superMesh.visible=true;
+    S.playerMax=160; S.playerHp=Math.min(S.playerMax, S.playerHp+60);
+    setHeadLabel(playerHeadBar.userData.label, '🍔汉堡超人');
+    showMsg('⚡ 汉堡变身！汉堡超人登场！⚡', 1600);
+  } else {
+    S.form='burger'; burgerMesh.visible=true; superMesh.visible=false;
+    S.playerMax=100; S.playerHp=Math.min(S.playerHp,100);
+    setHeadLabel(playerHeadBar.userData.label, '🍔汉堡');
+    showMsg('🍔 变回汉堡了！', 1200);
+  }
+  updateUI();
+}
+
+// ---------- 攻击 ----------
+function punchFX(){
+  const mesh = superMesh.visible? superMesh.getObjectByName('fistR') : null;
+  spawnBurst(player.position.clone().add(new THREE.Vector3(0,1.5,0)).add(forwardDir().multiplyScalar(1.2)), 0xffff00, 12);
+}
+function forwardDir(){
+  // 朝向 Boss 的方向
+  const d = boss.position.clone().sub(player.position); d.y=0; d.normalize();
+  return d;
+}
+function attack(){
+  if(S.over || S.atkCd>0) return;
+  S.atkCd = S.form==='super'? .35 : .6;
+  const dmg = S.form==='super'? 22+Math.random()*8 : 5+Math.random()*4;
+  // 出拳动画
+  punchT = 0.25;
+  punchFX();
+  const dist = player.position.distanceTo(boss.position);
+  if(dist < 4.2){
+    damageBoss(dmg);
+    // 击退
+    const dir = boss.position.clone().sub(player.position).setY(0).normalize();
+    boss.position.add(dir.multiplyScalar(S.form==='super'?1.2:.3));
+    showMsg(S.form==='super'?'💥 超人重拳！-'+Math.round(dmg):'🍔 汉堡撞击！-'+Math.round(dmg), 600);
+  } else {
+    // 超人可以发冲击波
+    if(S.form==='super') fireWave();
+  }
+}
+function fireWave(){
+  const geo = new THREE.SphereGeometry(.35,12,12);
+  const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({color:0x00e5ff}));
+  m.position.copy(player.position).add(new THREE.Vector3(0,1.6,0));
+  const dir = forwardDir();
+  scene.add(m);
+  projectiles.push({ mesh:m, vel:dir.multiplyScalar(22), life:1.2, dmg:15, from:'player', r:.5 });
+}
+function fireLaser(){
+  if(S.over || S.form!=='super' || S.laserCd>0) return;
+  S.laserCd = 1.0;
+  const geo = new THREE.SphereGeometry(.3,12,12);
+  const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({color:0xff0000}));
+  m.position.copy(player.position).add(new THREE.Vector3(0,2.2,0));
+  const dir = forwardDir();
+  // 激光更快更强
+  scene.add(m);
+  projectiles.push({ mesh:m, vel:dir.multiplyScalar(35), life:1.5, dmg:35, from:'player', r:.6, laser:true });
+  // 拖尾
+  spawnBurst(m.position, 0xff5722, 8);
+  showMsg('🔥 超人激光！', 600);
+}
+
+function damageBoss(d){
+  S.bossHp -= d;
+  spawnBurst(boss.position.clone().add(new THREE.Vector3(0,2.5,0)), 0xff0000, 15);
+  updateBossBar3D();
+  updateUI();
+  if(S.bossHp<=0){ S.bossHp=0; win(); }
+}
+function damagePlayer(d){
+  S.playerHp -= d;
+  spawnBurst(player.position.clone().add(new THREE.Vector3(0,1.5,0)), 0xff0000, 10);
+  document.body.style.background='#e53935';
+  setTimeout(()=>document.body.style.background='#87CEEB',120);
+  updateUI();
+  if(S.playerHp<=0){ S.playerHp=0; lose(); }
+}
+function updateBossBar3D(){
+  if(typeof refreshHeadBars==='function') refreshHeadBars();
+}
+function win(){
+  if(S.over) return; S.over=true;
+  spawnBurst(boss.position.clone().add(new THREE.Vector3(0,2,0)), 0xffeb3b, 80);
+  const o=document.getElementById('overlay');
+  document.getElementById('overlayTitle').textContent='🎉 胜利！Boss 被打败了！';
+  document.getElementById('overlaySub').textContent = S.form==='super'?'超人太强了！':'天啊你用汉堡打赢了？！';
+  o.style.display='flex';
+}
+function lose(){
+  if(S.over) return; S.over=true;
+  const o=document.getElementById('overlay');
+  document.getElementById('overlayTitle').textContent='💀 你被 Boss 打败了…';
+  document.getElementById('overlaySub').textContent='记得先按 E 变身成超人再打！';
+  o.style.display='flex';
+}
+
+// ---------- 粒子 ----------
+function spawnBurst(pos, color, n){
+  for(let i=0;i<n;i++){
+    const m = new THREE.Mesh(new THREE.SphereGeometry(.12+Math.random()*.12,8,8),
+      new THREE.MeshBasicMaterial({color, transparent:true}));
+    const v = new THREE.Vector3((Math.random()-.5)*10, Math.random()*8, (Math.random()-.5)*10);
+    scene.add(m);
+    particles.push({ mesh:m, vel:v, life:.6+Math.random()*.5 });
+    m.position.copy(pos);
+  }
+}
+
+// ---------- 输入 ----------
+addEventListener('keydown', e=>{
+  S.keys[e.code]=true;
+  if(e.code==='KeyE') transform();
+  if(e.code==='KeyJ') attack();
+  if(e.code==='KeyK') fireLaser();
+  if(e.code==='Space') e.preventDefault();
+});
+addEventListener('keyup', e=>{ S.keys[e.code]=false; });
+document.getElementById('btnTransform').onclick = transform;
+document.getElementById('btnAttack').onclick = attack;
+document.getElementById('btnLaser').onclick = fireLaser;
+canvas.addEventListener('pointerdown', e=>{ if(e.button===0) attack(); });
+
+// 视角拖拽
+let dragging=false, px=0;
+canvas.addEventListener('pointerdown', e=>{ dragging=true; px=e.clientX; });
+addEventListener('pointermove', e=>{ if(dragging){ S.camAngle += (e.clientX-px)*.008; px=e.clientX; } });
+addEventListener('pointerup', ()=>dragging=false);
+addEventListener('wheel', e=>{ S.camDist = Math.min(20, Math.max(6, S.camDist + e.deltaY*.01)); });
+addEventListener('resize', ()=>{
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ---------- 主循环 ----------
+const clock = new THREE.Clock();
+let punchT = 0, walkT = 0;
+updateUI(); updateBossBar3D();
+showMsg('🍔 WASD 移动，E 变身超人去打 Boss！', 2500);
+
+function animate(){
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), .05);
+  S.time += dt;
+  if(S.transformCd>0) S.transformCd-=dt;
+  if(S.atkCd>0) S.atkCd-=dt;
+  if(S.laserCd>0) S.laserCd-=dt;
+
+  if(!S.over){
+    // --- 玩家移动 ---
+    const speed = S.form==='super'? 9 : 5.5;
+    const mx = (S.keys['KeyD']?1:0)-(S.keys['KeyA']?1:0);
+    const mz = (S.keys['KeyS']?1:0)-(S.keys['KeyW']?1:0);
+    // 相对视角方向
+    const sin=Math.sin(S.camAngle), cos=Math.cos(S.camAngle);
+    const wx = mx*cos - mz*sin, wz = mx*sin + mz*cos;
+    player.position.x += wx*speed*dt;
+    player.position.z += wz*speed*dt;
+    player.position.x = Math.max(-45,Math.min(45,player.position.x));
+    player.position.z = Math.max(-45,Math.min(45,player.position.z));
+    if(wx||wz){
+      walkT += dt*10;
+      player.rotation.y = Math.atan2(wx, wz);
+      // 走路弹跳
+      const m = S.form==='super'?superMesh:burgerMesh;
+      m.position.y = Math.abs(Math.sin(walkT))*.15;
+    }
+    // 跳跃 / 飞行
+    const isSuper = S.form==='super';
+    if(isSuper){
+      if(S.keys['Space']){ S.flying=true; player.position.y += 10*dt; }
+      else { if(player.position.y>0) player.position.y -= (S.flying?4:18)*dt; if(player.position.y<=0){player.position.y=0; S.flying=false;} }
+      player.position.y = Math.min(player.position.y, 18);
+      // 飞行姿势：身体前倾
+      superMesh.rotation.x = S.flying? -.5 : 0;
+      // 披风飘动
+      const cape = superMesh.getObjectByName('cape');
+      if(cape) cape.rotation.x = .25 + Math.sin(S.time*8)*.25 + (S.flying?.5:0);
+    } else {
+      if(S.keys['Space'] && S.grounded){ S.vy=8; S.grounded=false; }
+      if(!S.grounded){
+        S.vy -= 22*dt; player.position.y += S.vy*dt;
+        if(player.position.y<=0){ player.position.y=0; S.vy=0; S.grounded=true; }
+      }
+      burgerMesh.rotation.y += (wx||wz)? .1 : 0;
+    }
+    // 出拳动画
+    if(punchT>0){
+      punchT-=dt;
+      if(isSuper){
+        const aR=superMesh.getObjectByName('armR'), fR=superMesh.getObjectByName('fistR');
+        if(aR){ aR.rotation.x = -1.5; } if(fR){ fR.position.z = 1.2; }
+      }
+    } else if(isSuper){
+      const aR=superMesh.getObjectByName('armR'), fR=superMesh.getObjectByName('fistR');
+      if(aR){ aR.rotation.x = Math.sin(S.time*3)*.2; } if(fR){ fR.position.z = 0; }
+    }
+
+    // --- Boss AI ---
+    const toP = player.position.clone().sub(boss.position); toP.y=0;
+    const dist = toP.length();
+    boss.rotation.y = Math.atan2(toP.x, toP.z);
+    if(dist > 2.8){
+      toP.normalize();
+      const bspeed = S.bossHp<200? 5 : 3.2; // 狂暴加速
+      boss.position.add(toP.multiplyScalar(bspeed*dt));
+      boss.position.y = Math.abs(Math.sin(S.time*6))*.3;
+      // 手臂挥舞
+      const aL=boss.getObjectByName('bossArmL'), aR=boss.getObjectByName('bossArmR');
+      if(aL) aL.rotation.x = Math.sin(S.time*6)*.6;
+      if(aR) aR.rotation.x = -Math.sin(S.time*6)*.6;
+    } else {
+      // 近战攻击
+      if(S.bossAtkCd>0) S.bossAtkCd-=dt;
+      else {
+        S.bossAtkCd = 1.4;
+        damagePlayer(8+Math.random()*6);
+        showMsg('👹 Boss 砸了你一下！', 700);
+        const aR=boss.getObjectByName('bossArmR');
+        if(aR) aR.rotation.x = -1.2;
+      }
+    }
+    // Boss 偶尔跳跃砸地（范围伤害）
+    if(Math.random()<dt*.3 && dist<8){
+      spawnBurst(boss.position, 0x9c27b0, 5);
+    }
+  }
+
+  // --- 子弹 ---
+  for(let i=projectiles.length-1;i>=0;i--){
+    const p=projectiles[i];
+    p.life-=dt;
+    p.mesh.position.add(p.vel.clone().multiplyScalar(dt));
+    if(p.laser){ p.mesh.scale.set(1+Math.random(),1+Math.random(),1+Math.random()); }
+    let dead = p.life<=0;
+    if(!dead && p.from==='player'){
+      if(p.mesh.position.distanceTo(boss.position.clone().add(new THREE.Vector3(0,2,0))) < 2.2){
+        damageBoss(p.dmg);
+        spawnBurst(p.mesh.position, 0xffff00, 12);
+        dead=true;
+      }
+    }
+    // 粒子拖尾
+    if(p.laser && !dead && Math.random()<.5) spawnBurst(p.mesh.position, 0xff9800, 1);
+    if(dead || p.mesh.position.length()>120){ scene.remove(p.mesh); projectiles.splice(i,1); }
+  }
+
+  // --- 粒子 ---
+  for(let i=particles.length-1;i>=0;i--){
+    const p=particles[i];
+    p.life-=dt;
+    p.vel.y -= 12*dt;
+    p.mesh.position.add(p.vel.clone().multiplyScalar(dt));
+    p.mesh.material.opacity = Math.max(0,p.life);
+    if(p.life<=0){ scene.remove(p.mesh); particles.splice(i,1); }
+  }
+
+  // --- 头顶血条跟随 + 永远朝向相机（胜负后也继续跟随） ---
+  playerHeadBar.position.set(player.position.x, player.position.y + (S.form==='super'?3.9:2.9), player.position.z);
+  playerHeadBar.lookAt(camera.position);
+  bossHeadBar.position.set(boss.position.x, boss.position.y + 5.4, boss.position.z);
+  bossHeadBar.lookAt(camera.position);
+  refreshHeadBars();
+
+  // --- 相机跟随 ---
+  const cx = player.position.x + Math.sin(S.camAngle)*S.camDist;
+  const cz = player.position.z + Math.cos(S.camAngle)*S.camDist;
+  const cy = player.position.y + S.camH;
+  camera.position.lerp(new THREE.Vector3(cx,cy,cz), .08);
+  camera.lookAt(player.position.x, player.position.y+1.8, player.position.z);
+
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
